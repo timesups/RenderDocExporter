@@ -24,8 +24,7 @@ class ExportConfig:
     def transform_xyz(self, x: float, y: float, z: float) -> Tuple[float, float, float]:
         """选 Z 轴向上：不旋转。选 Y 轴向上：绕 Y 轴旋转 +90°（右手系，弧度 π/2）。"""
         if self.up_axis == self.UP_Y:
-            # R_y(+90°): x' = z, y' = y, z' = -x
-            return (float(z), float(y), float(-x))
+            return (float(x), float(y), float(z))
         return (float(y), float(-x), float(z))
 
 class Vec:
