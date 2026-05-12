@@ -1,0 +1,9 @@
+{
+    "extension_api": 1,
+    "name": "Renderdoc Exporter",
+    "version": "1.0",
+    "minimum_renderdoc": "1.4",
+    "description": "用于导出RenderDoc捕获的模型,目前仅支持obj,后续会添加FBX等格式",
+    "author": "zcx<zcxtimesup@gmail.com>",
+    "url": "None"
+}
