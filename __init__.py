@@ -8,6 +8,7 @@ from PySide2 import QtCore
 from .csv_to_model.util import *
 from .csv_to_model.exprorter import *
 from .csv_to_model.exporter_dialog import ModelExportDialog
+from .csv_to_model.fbx_exporter import write_vertices_to_fbx
 
 def log(message):
     with open(r"C:\Users\admin\Desktop\Log.txt", "a", encoding="utf-8") as f:
@@ -68,7 +69,9 @@ def ExportFbx(pyrenderdoc_, data_):
     data_map = dialog.get_data_map(size_map)
     export_cfg = dialog.get_export_config()
 
-    save_path = emgr.SaveFileName("选择模型导出的位置", '', '*.obj')
+    save_path = emgr.SaveFileName(
+        "选择模型导出的位置", "", "FBX (*.fbx);;OBJ (*.obj)"
+    )
     if not save_path:
         emgr.ErrorDialog("选择的路径无效", 'Error!!!')
         return
@@ -99,19 +102,30 @@ def ExportFbx(pyrenderdoc_, data_):
         emgr.MessageDialog("已取消导出", "Info")
         return
 
-    progress.setLabelText("正在写入 OBJ 文件…")
+    is_fbx = save_path.lower().endswith(".fbx")
+    progress.setLabelText(
+        "正在写入 FBX 文件…" if is_fbx else "正在写入 OBJ 文件…"
+    )
     progress.setValue(86)
     _process_ui_events()
 
     try:
-        def on_write_obj(cur: int, total: int) -> None:
+        def on_write_file(cur: int, total: int) -> None:
             _check_export_cancelled()
             progress.setValue(85 + int(15 * cur / max(total, 1)))
-            progress.setLabelText(f"写入 OBJ：{cur} / {total}")
+            label = "FBX" if is_fbx else "OBJ"
+            progress.setLabelText(f"写入 {label}：{cur} / {total}")
 
-        paths = write_vertices_to_obj_per_uv(
-            verts, idx, save_path, config=export_cfg, on_progress=on_write_obj
-        )
+        if is_fbx:
+            write_vertices_to_fbx(
+                verts, idx, save_path, config=export_cfg, on_progress=on_write_file
+            )
+            written_msg = save_path
+        else:
+            paths = write_vertices_to_obj_per_uv(
+                verts, idx, save_path, config=export_cfg, on_progress=on_write_file
+            )
+            written_msg = "\n".join(paths)
     except InterruptedError:
         emgr.MessageDialog("已取消导出", "Info")
         return
@@ -120,5 +134,5 @@ def ExportFbx(pyrenderdoc_, data_):
     progress.setLabelText("完成")
     _process_ui_events()
 
-    emgr.MessageDialog("导出成功","Info")
+    emgr.MessageDialog(f"导出成功\n{written_msg}", "Info")
 
