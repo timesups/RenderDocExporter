@@ -24,9 +24,6 @@ def _process_ui_events():
 # 注册入口
 def register(version_, pyrenderdoc_):
     emgr = pyrenderdoc_.Extensions()
-
-    emgr.MessageDialog("插件注册成功","Info")
-
     if pyrenderdoc_.HasMeshPreview():
         emgr.RegisterPanelMenu(qrd.PanelMenu.MeshPreview, ["导出为模型"], ExportFbx)
 
