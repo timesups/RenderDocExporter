@@ -88,7 +88,15 @@ class ModelExportDialog:
             flip_n = bool(self.mqt.IsWidgetChecked(self._chk_flip_normals))
         if self._chk_flip_winding is not None:
             flip_w = bool(self.mqt.IsWidgetChecked(self._chk_flip_winding))
-        return ExportConfig(up_axis=up, flip_normals=flip_n, flip_winding=flip_w)
+        flip_v = False
+        if getattr(self, "_chk_flip_u", None) is not None:
+            flip_v = bool(self.mqt.IsWidgetChecked(self._chk_flip_u))
+        return ExportConfig(
+            up_axis=up,
+            flip_normals=flip_n,
+            flip_winding=flip_w,
+            flip_uv_v=flip_v,
+        )
 
     def init_ui(self):
         self.widget = self.mqt.CreateToplevelWidget("模型导出配置", None)
@@ -146,6 +154,7 @@ class ModelExportDialog:
         self.mqt.AddWidget(self.widget, export_settings_row)
 
         export_flags = self.mqt.CreateVerticalContainer()
+        
         chk_n = self.mqt.CreateCheckbox(None)
         self.mqt.SetWidgetText(chk_n, "反转法线（推荐开启：对齐常见 D3D / 网格数据与 OBJ 查看器）")
         self.mqt.SetWidgetChecked(chk_n, self.default_flip_normals)
@@ -157,6 +166,12 @@ class ModelExportDialog:
         self.mqt.SetWidgetChecked(chk_w, self.default_flip_winding)
         self._chk_flip_winding = chk_w
         self.mqt.AddWidget(export_flags, chk_w)
+
+        chk_flip_u = self.mqt.CreateCheckbox(None)
+        self.mqt.SetWidgetText(chk_flip_u,"垂直翻转UV")
+        self._chk_flip_u = chk_flip_u
+        self.mqt.AddWidget(export_flags,chk_flip_u)
+
 
         self.mqt.AddWidget(self.widget, export_flags)
 

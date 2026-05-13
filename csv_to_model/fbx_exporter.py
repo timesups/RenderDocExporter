@@ -57,7 +57,7 @@ def write_vertices_to_fbx(
     """
     将顶点列表与紧凑三角形索引写入 FBX（二进制 FBX 7.5），UTF-8 路径由调用方保证。
 
-    - 位置、法线应用与 OBJ 相同的 ExportConfig.transform_xyz / flip_normals / flip_winding。
+    - 位置、法线应用与 OBJ 相同的 ExportConfig.transform_xyz / flip_normals / flip_winding；UV 可选 transform_uv（垂直翻转 V）。
     - 所有 UV 通道一并写入（通过多套 TextureMapping 区分），对应 Vertex.uvs 中顺序。
     - 若任一顶点的 Color 非空，则为整张网格写入顶点色通道；缺省颜色为白。
     """
@@ -133,9 +133,13 @@ def write_vertices_to_fbx(
         uv_el = mesh.create_element_uv(_UV_TEXTURE_MAPPINGS[ch])
         uv_el.mapping_mode = a3d_ent.MappingMode.CONTROL_POINT
         uv_el.reference_mode = a3d_ent.ReferenceMode.DIRECT
-        layer_data = [
-            Vector2(float(v.uvs[ch].x), float(v.uvs[ch].y)) for v in vertices
-        ]
+        layer_data = []
+        for v in vertices:
+            if config is not None:
+                tu, tv = config.transform_uv(v.uvs[ch].x, v.uvs[ch].y)
+            else:
+                tu, tv = float(v.uvs[ch].x), float(v.uvs[ch].y)
+            layer_data.append(Vector2(tu, tv))
         uv_el.add_data(layer_data)
 
     # 顶点色

@@ -5,7 +5,7 @@ DataColumnTypeMap = Dict[str, int]
 
 
 class ExportConfig:
-    """导出选项：轴向、法线/绕序等，由对话框填入并传入 OBJ 等写入函数。"""
+    """导出选项：轴向、法线/绕序、UV 垂直翻转等，由对话框填入并传入 OBJ 等写入函数。"""
 
     UP_Z = "Z"
     UP_Y = "Y"
@@ -16,10 +16,19 @@ class ExportConfig:
         up_axis: str = "Z",
         flip_normals: bool = True,
         flip_winding: bool = True,
+        flip_uv_v: bool = False,
     ) -> None:
         self.up_axis = up_axis if up_axis in (self.UP_Z, self.UP_Y) else self.UP_Z
         self.flip_normals = flip_normals
         self.flip_winding = flip_winding
+        self.flip_uv_v = flip_uv_v
+
+    def transform_uv(self, u: float, v: float) -> Tuple[float, float]:
+        """垂直翻转 UV：对 V 做 1-v（常见图像坐标与渲染 UV 轴向对齐）。"""
+        u, v = float(u), float(v)
+        if self.flip_uv_v:
+            v = 1.0 - v
+        return (u, v)
 
     def transform_xyz(self, x: float, y: float, z: float) -> Tuple[float, float, float]:
         """选 Z 轴向上：不旋转。选 Y 轴向上：绕 Y 轴旋转 +90°（右手系，弧度 π/2）。"""
