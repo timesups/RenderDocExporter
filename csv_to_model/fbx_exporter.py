@@ -128,6 +128,25 @@ def write_vertices_to_fbx(
         vn.data.append(FVector4(nx, ny, nz, 0.0))
     mesh.add_element(vn)
 
+    # 切线（CONTROL_POINT + DIRECT；w 为副切线方向符号，保留原始值）
+    if any(v.Tangent is not None for v in vertices):
+        vt = a3d_ent.VertexElementTangent()
+        vt.mapping_mode = a3d_ent.MappingMode.CONTROL_POINT
+        vt.reference_mode = a3d_ent.ReferenceMode.DIRECT
+        for v in vertices:
+            if v.Tangent is None:
+                tx, ty, tz, tw = 1.0, 0.0, 0.0, 1.0
+            else:
+                tx, ty, tz = (
+                    float(v.Tangent.x),
+                    float(v.Tangent.y),
+                    float(v.Tangent.z),
+                )
+                tw = float(v.Tangent.w) if v.Tangent.w else 1.0
+            tx, ty, tz = _pose_direction(config, tx, ty, tz)
+            vt.data.append(FVector4(tx, ty, tz, tw))
+        mesh.add_element(vt)
+
     # 多 UV：每层对应 Vertex.uvs[ch]
     for ch in range(n_uv):
         uv_el = mesh.create_element_uv(_UV_TEXTURE_MAPPINGS[ch])

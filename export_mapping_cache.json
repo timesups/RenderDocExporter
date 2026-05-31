@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "header_mappings": {
+    "_input0": "Position",
+    "_input1": "UV",
+    "_input2": "Normal",
+    "_input3": "None",
+    "_input4": "None",
+    "_input5": "None",
+    "_input6": "None"
+  },
+  "export_settings": {
+    "up_axis_label": "Y轴向上",
+    "flip_normals": true,
+    "flip_winding": true,
+    "flip_uv_v": true
+  }
+}

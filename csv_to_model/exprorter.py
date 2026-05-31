@@ -21,7 +21,7 @@ def get_vertex(row_datas, sizes: Mapping[str, int], data_map: DataColumnTypeMap)
 
     vertex: Vertex = Vertex()
     for key in data_map.keys():
-        vertex.fill_data(data_map[key], Vec(*row_datas[0 : sizes[key]]))
+        vertex.fill_data(data_map[key], Vec(row_datas[0 : sizes[key]]))
         row_datas = row_datas[sizes[key] :]
     return vertex_id, index, vertex
 
