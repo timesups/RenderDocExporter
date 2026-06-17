@@ -91,27 +91,92 @@ class ModelExportDialog:
     emgr = None
     mqt = None
     data_types = ["None", "Position", "Normal", "Tangent", "Color", "UV"]
-    up_axis_labels = ["Z轴向上", "Y轴向上"]
-    # 与历史 OBJ 导出默认一致：从 D3D/网格预览表导出时通常需要法线取反 + 交换绕序
+    coord_preset_ids = [pid for pid, _ in ExportConfig.COORD_PRESET_OPTIONS]
+    default_coord_preset = ExportConfig.COORD_OPENGL
+    default_uniform_scale = 1.0
+    # 与历史 OBJ 导出默认一致：从 D3D VS Input 导出时通常需要法线取反 + 交换绕序
     default_flip_normals = True
     default_flip_winding = True
 
     def __init__(self, emgr_, data_headers):
         self.emgr = emgr_
         self.mqt = emgr_.GetMiniQtHelper()
-        self.data_headers: List[str] = _sort_attribute_headers(data_headers)
-        self._header_to_option: Dict[str, str] = {}
-        self.header_combos: List[Tuple[str, object]] = []
+        self.data_headers = _sort_attribute_headers(data_headers)
+        self._header_to_option = {}
+        self.header_combos = []
         cache = _load_mapping_cache()
-        self._cached_header_mappings: Dict[str, str] = cache["header_mappings"]
-        self._cached_export_settings: Dict[str, Any] = cache["export_settings"]
-        self._up_axis_label: str = self._cached_export_settings.get(
-            "up_axis_label", self.up_axis_labels[0]
+        self._cached_header_mappings = cache["header_mappings"]
+        self._cached_export_settings = cache["export_settings"]
+        self._coord_preset = self._load_cached_coord_preset()
+        self._coord_preset_label = self._load_cached_coord_preset_label()
+        self._uniform_scale = self._cached_float(
+            "uniform_scale", self.default_uniform_scale
         )
-        if self._up_axis_label not in self.up_axis_labels:
-            self._up_axis_label = self.up_axis_labels[0]
         self._chk_flip_normals = None
         self._chk_flip_winding = None
+        self._coord_preset_combo = None
+        self._coord_preset_desc_label = None
+
+    def _preset_id_from_label(self, label):
+        for pid, opt_label in ExportConfig.COORD_PRESET_OPTIONS:
+            if label == opt_label:
+                return pid
+        if isinstance(label, str):
+            low = label.lower()
+            if "opengl" in low:
+                return ExportConfig.COORD_OPENGL
+            if "maya" in low:
+                return ExportConfig.COORD_MAYA
+            if "blender" in low:
+                return ExportConfig.COORD_BLENDER
+            if "unreal" in low or "ue" in low:
+                return ExportConfig.COORD_UNREAL
+            if "d3d" in low or "原数据" in label:
+                return ExportConfig.COORD_D3D_RAW
+        return self.default_coord_preset
+
+    def _preset_id_from_combo_text(self, text):
+        preset_id = str(text).strip()
+        if preset_id in ExportConfig._VALID_COORD_PRESETS:
+            return preset_id
+        return self._preset_id_from_label(preset_id)
+
+    def _apply_coord_preset(self, preset_id, update_desc=True):
+        if preset_id not in ExportConfig._VALID_COORD_PRESETS:
+            preset_id = self.default_coord_preset
+        self._coord_preset = preset_id
+        self._coord_preset_label = ExportConfig.label_for_preset(preset_id)
+        if update_desc and self._coord_preset_desc_label is not None:
+            self.mqt.SetWidgetText(
+                self._coord_preset_desc_label, self._coord_preset_label
+            )
+
+    def _load_cached_coord_preset(self):
+        cached = self._cached_export_settings.get("coord_preset")
+        if isinstance(cached, str) and cached in ExportConfig._VALID_COORD_PRESETS:
+            return cached
+        cached_label = self._cached_export_settings.get("coord_preset_label")
+        if isinstance(cached_label, str):
+            pid = self._preset_id_from_label(cached_label)
+            if pid in ExportConfig._VALID_COORD_PRESETS:
+                return pid
+        cached_axis = self._cached_export_settings.get("up_axis")
+        if cached_axis == ExportConfig.UP_Z:
+            return ExportConfig.COORD_LEGACY_Z
+        if cached_axis == ExportConfig.UP_Y:
+            return ExportConfig.COORD_D3D_RAW
+        return self.default_coord_preset
+
+    def _load_cached_coord_preset_label(self):
+        cached_label = self._cached_export_settings.get("coord_preset_label")
+        if isinstance(cached_label, str):
+            for _, label in ExportConfig.COORD_PRESET_OPTIONS:
+                if cached_label == label:
+                    return label
+        return ExportConfig.label_for_preset(self._coord_preset)
+
+    def _on_coord_preset_changed(self, text):
+        self._apply_coord_preset(self._preset_id_from_combo_text(text))
 
     def _guess_default_option(self, header: str) -> str:
         rank = _header_semantic_rank(header)
@@ -133,18 +198,28 @@ class ModelExportDialog:
             return cached
         return self._guess_default_option(header)
 
-    def _cached_bool(self, key: str, default: bool) -> bool:
+    def _cached_bool(self, key, default):
         value = self._cached_export_settings.get(key, default)
         return bool(value)
+
+    def _cached_float(self, key, default):
+        value = self._cached_export_settings.get(key, default)
+        try:
+            f = float(value)
+            if f > 0.0:
+                return f
+        except (TypeError, ValueError):
+            pass
+        return float(default)
 
     def _store_header_option(self, header: str, option_text: str) -> None:
         self._header_to_option[header] = option_text
 
     def get_data_map(self, sizes: Optional[Dict[str, int]] = None) -> DataColumnTypeMap:
         """
-        供 get_data_from_model(model, sizes, data_map) 的第三个参数。
+        供 get_data_from_eid 的 data_map 参数。
 
-        - key：与 sizes（get_size_per_data 结果）相同的表头基名；
+        - key：与 size_map（probe_mesh_headers 结果）相同的属性基名；
         - value：DataType 整型（与 Vertex.fill_data 中比较一致）；
         - 键顺序与 sizes 一致（须传入 sizes，与第二参数为同一 dict 引用或相同 key 顺序）。
         """
@@ -154,34 +229,59 @@ class ModelExportDialog:
             for k in keys
         }
 
-    def _sync_up_axis_from_ui(self) -> None:
-        """从下拉框读取当前项（确认时调用）；避免 QString 与 str 比较失败导致轴向不生效。"""
-        w = getattr(self, "_up_axis_combo", None)
-        if w is None:
+    def _sync_coord_preset_from_ui(self):
+        """从 MiniQt 下拉框读取预设 id（ASCII）；读不到或与当前不一致时不误覆盖。"""
+        combo = self._coord_preset_combo
+        if combo is None:
             return
         try:
-            if hasattr(w, "currentText"):
-                self._up_axis_label = str(w.currentText())
+            text = str(self.mqt.GetWidgetText(combo)).strip()
+            if text in self.coord_preset_ids:
+                self._apply_coord_preset(text, update_desc=True)
         except Exception:
             pass
 
+    def _sync_uniform_scale_from_ui(self):
+        w = getattr(self, "_uniform_scale_spin", None)
+        if w is None:
+            return
+        try:
+            val = float(self.mqt.GetSpinboxValue(w))
+            self._uniform_scale = val if val > 0.0 else self.default_uniform_scale
+        except Exception:
+            pass
+
+    def _build_export_settings_dict(self):
+        return {
+            "coord_preset": self._coord_preset,
+            "coord_preset_label": self._coord_preset_label,
+            "up_axis": ExportConfig(coord_preset=self._coord_preset).up_axis,
+            "uniform_scale": float(self._uniform_scale),
+            "flip_normals": bool(
+                self.mqt.IsWidgetChecked(self._chk_flip_normals)
+            )
+            if self._chk_flip_normals is not None
+            else self.default_flip_normals,
+            "flip_winding": bool(
+                self.mqt.IsWidgetChecked(self._chk_flip_winding)
+            )
+            if self._chk_flip_winding is not None
+            else self.default_flip_winding,
+            "flip_uv_v": bool(self.mqt.IsWidgetChecked(self._chk_flip_u))
+            if getattr(self, "_chk_flip_u", None) is not None
+            else False,
+        }
+
     def get_export_config(self) -> ExportConfig:
-        lab = str(self._up_axis_label or "").strip()
-        up = ExportConfig.UP_Y if "Y轴向上" in lab else ExportConfig.UP_Z
-        flip_n = self.default_flip_normals
-        flip_w = self.default_flip_winding
-        if self._chk_flip_normals is not None:
-            flip_n = bool(self.mqt.IsWidgetChecked(self._chk_flip_normals))
-        if self._chk_flip_winding is not None:
-            flip_w = bool(self.mqt.IsWidgetChecked(self._chk_flip_winding))
-        flip_v = False
-        if getattr(self, "_chk_flip_u", None) is not None:
-            flip_v = bool(self.mqt.IsWidgetChecked(self._chk_flip_u))
+        self._sync_coord_preset_from_ui()
+        self._sync_uniform_scale_from_ui()
+        settings = self._build_export_settings_dict()
         return ExportConfig(
-            up_axis=up,
-            flip_normals=flip_n,
-            flip_winding=flip_w,
-            flip_uv_v=flip_v,
+            coord_preset=settings["coord_preset"],
+            flip_normals=settings["flip_normals"],
+            flip_winding=settings["flip_winding"],
+            flip_uv_v=settings["flip_uv_v"],
+            uniform_scale=settings["uniform_scale"],
         )
 
     def init_ui(self):
@@ -220,19 +320,39 @@ class ModelExportDialog:
         self.mqt.AddWidget(self.widget, export_title)
 
         export_settings_row = self.mqt.CreateHorizontalContainer()
-        up_label = self.mqt.CreateLabel()
-        self.mqt.SetWidgetText(up_label, "坐标向上轴")
-        self.mqt.AddWidget(export_settings_row, up_label)
-        up_combo = self.mqt.CreateComboBox(
+        coord_label = self.mqt.CreateLabel()
+        self.mqt.SetWidgetText(coord_label, "坐标系预设")
+        self.mqt.AddWidget(export_settings_row, coord_label)
+        coord_combo = self.mqt.CreateComboBox(
             False,
-            lambda ctx, w, text: setattr(self, "_up_axis_label", str(text)),
+            lambda ctx, w, text: self._on_coord_preset_changed(str(text)),
         )
-        self.mqt.SetComboOptions(up_combo, self.up_axis_labels)
-        self.mqt.SelectComboOption(up_combo, self._up_axis_label)
-        self._up_axis_combo = up_combo
-        self._up_axis_label = str(self._up_axis_label)
-        self.mqt.AddWidget(export_settings_row, up_combo)
+        self.mqt.SetComboOptions(coord_combo, self.coord_preset_ids)
+        self._coord_preset_combo = coord_combo
+        combo_id = (
+            self._coord_preset
+            if self._coord_preset in self.coord_preset_ids
+            else self.default_coord_preset
+        )
+        self.mqt.SelectComboOption(coord_combo, combo_id)
+        self.mqt.AddWidget(export_settings_row, coord_combo)
+        coord_desc = self.mqt.CreateLabel()
+        self._coord_preset_desc_label = coord_desc
+        self.mqt.SetWidgetText(coord_desc, self._coord_preset_label)
+        self.mqt.AddWidget(export_settings_row, coord_desc)
+        self._apply_coord_preset(self._coord_preset, update_desc=True)
         self.mqt.AddWidget(self.widget, export_settings_row)
+
+        scale_row = self.mqt.CreateHorizontalContainer()
+        scale_label = self.mqt.CreateLabel()
+        self.mqt.SetWidgetText(scale_label, "统一缩放")
+        self.mqt.AddWidget(scale_row, scale_label)
+        scale_spin = self.mqt.CreateSpinbox(4, 0.1)
+        self.mqt.SetSpinboxBounds(scale_spin, 0.0001, 100000.0)
+        self.mqt.SetSpinboxValue(scale_spin, self._uniform_scale)
+        self._uniform_scale_spin = scale_spin
+        self.mqt.AddWidget(scale_row, scale_spin)
+        self.mqt.AddWidget(self.widget, scale_row)
 
         export_flags = self.mqt.CreateVerticalContainer()
         
@@ -279,24 +399,10 @@ class ModelExportDialog:
         return self.widget
 
     def button_accept(self, context_, widget_, text_):
-        self._sync_up_axis_from_ui()
+        self._sync_coord_preset_from_ui()
+        self._sync_uniform_scale_from_ui()
         _save_mapping_cache(
             dict(self._header_to_option),
-            {
-                "up_axis_label": self._up_axis_label,
-                "flip_normals": bool(
-                    self.mqt.IsWidgetChecked(self._chk_flip_normals)
-                )
-                if self._chk_flip_normals is not None
-                else self.default_flip_normals,
-                "flip_winding": bool(
-                    self.mqt.IsWidgetChecked(self._chk_flip_winding)
-                )
-                if self._chk_flip_winding is not None
-                else self.default_flip_winding,
-                "flip_uv_v": bool(self.mqt.IsWidgetChecked(self._chk_flip_u))
-                if getattr(self, "_chk_flip_u", None) is not None
-                else False,
-            },
+            self._build_export_settings_dict(),
         )
         self.mqt.CloseCurrentDialog(True)

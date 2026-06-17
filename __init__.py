@@ -5,10 +5,10 @@ import qrenderdoc as qrd
 from PySide2 import QtWidgets
 from PySide2 import QtCore
 
-from .csv_to_model.util import *
-from .csv_to_model.exprorter import *
+from .csv_to_model.mesh_from_eid import get_data_from_eid, probe_mesh_headers
 from .csv_to_model.exporter_dialog import ModelExportDialog
 from .csv_to_model.fbx_exporter import write_vertices_to_fbx
+from .csv_to_model.obj_exporter import write_vertices_to_obj_per_uv
 
 def log(message):
     with open(r"C:\Users\admin\Desktop\Log.txt", "a", encoding="utf-8") as f:
@@ -24,8 +24,8 @@ def _process_ui_events():
 # 注册入口
 def register(version_, pyrenderdoc_):
     emgr = pyrenderdoc_.Extensions()
-    if pyrenderdoc_.HasMeshPreview():
-        emgr.RegisterPanelMenu(qrd.PanelMenu.MeshPreview, ["导出为模型"], ExportFbx)
+    emgr.RegisterPanelMenu(qrd.PanelMenu.EventBrowser, ["导出为模型"], ExportFbx)
+    emgr.RegisterPanelMenu(qrd.PanelMenu.MeshPreview, ["导出为模型"], ExportFbx)
 
 # 异常捕获
 def error_log(func_):
@@ -45,20 +45,17 @@ def error_log(func_):
 def ExportFbx(pyrenderdoc_, data_):
     emgr = pyrenderdoc_.Extensions()
 
-
-    #获取表格数据
-    main_window = pyrenderdoc_.GetMainWindow().Widget()
-    table = main_window.findChild(QtWidgets.QTableView, 'inTable')
-    model = table.model()
-    row_count = model.rowCount()
-    column_count = model.columnCount()
-    if row_count <= 1 and column_count <= 2:
-        emgr.ErrorDialog("没有用于导出的模型数据", "错误")
+    eid = pyrenderdoc_.CurEvent()
+    action = pyrenderdoc_.CurAction()
+    if action is None:
+        emgr.ErrorDialog(f"EID {eid} 不是 Draw Call，请先选中一条绘制事件", "错误")
         return
-    
-    #获取表头
-    headers = [model.headerData(idx, QtCore.Qt.Horizontal) for idx in range(0,column_count)][2:]
-    size_map = get_size_per_data(headers)
+
+    size_map, probe_err = probe_mesh_headers(pyrenderdoc_)
+    if probe_err:
+        emgr.ErrorDialog(probe_err, "错误")
+        return
+
     dialog = ModelExportDialog(emgr, list(size_map.keys()))
     if not dialog.mqt.ShowWidgetAsDialog(dialog.init_ui()):
         return
@@ -74,7 +71,9 @@ def ExportFbx(pyrenderdoc_, data_):
         return
 
     main_widget = pyrenderdoc_.GetMainWindow().Widget()
-    progress = QtWidgets.QProgressDialog("正在读取表格数据…", "取消", 0, 100, main_widget)
+    progress = QtWidgets.QProgressDialog(
+        f"正在读取 EID {eid} 网格数据…", "取消", 0, 100, main_widget
+    )
     progress.setWindowTitle("导出模型")
     progress.setWindowModality(QtCore.Qt.ApplicationModal)
     progress.setMinimumDuration(0)
@@ -90,10 +89,13 @@ def ExportFbx(pyrenderdoc_, data_):
         def on_read_rows(cur: int, total: int) -> None:
             _check_export_cancelled()
             progress.setValue(int(85 * cur / max(total, 1)))
-            progress.setLabelText(f"读取网格：{cur} / {total} 行")
+            progress.setLabelText(f"读取网格：{cur} / {total} 索引")
 
-        verts, idx = get_data_from_model(
-            model, size_map, data_map, on_progress=on_read_rows
+        verts, idx = get_data_from_eid(
+            pyrenderdoc_,
+            size_map,
+            data_map,
+            on_progress=on_read_rows,
         )
     except InterruptedError:
         emgr.MessageDialog("已取消导出", "Info")

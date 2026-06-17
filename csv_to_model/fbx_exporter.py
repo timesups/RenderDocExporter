@@ -29,14 +29,16 @@ def _pose_position(
 ) -> Tuple[float, float, float]:
     if config is None:
         return (float(x), float(y), float(z))
-    return config.transform_xyz(x, y, z)
+    return config.transform_position(x, y, z)
 
 
 def _pose_direction(
     config: Optional[ExportConfig], x: float, y: float, z: float
 ) -> Tuple[float, float, float]:
-    """与位置使用同一线性变换，用于法线（正交旋转时与位置一致）。"""
-    return _pose_position(config, x, y, z)
+    """法线 / 切线：坐标系变换，不含统一缩放。"""
+    if config is None:
+        return (float(x), float(y), float(z))
+    return config.transform_direction(x, y, z)
 
 
 def _vec_to_vertex_color_f4(v: Vec) -> FVector4:

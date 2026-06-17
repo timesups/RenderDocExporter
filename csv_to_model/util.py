@@ -1,40 +1,122 @@
 from typing import Dict, List, Sequence, Tuple, Union, overload
 
-# 表头基名 -> DataType 整型，与 get_data_from_model(..., data_map) 一致
+# 属性基名 -> DataType 整型，与 get_data_from_eid(..., data_map) 一致
 DataColumnTypeMap = Dict[str, int]
 
 
 class ExportConfig:
-    """导出选项：轴向、法线/绕序、UV 垂直翻转等，由对话框填入并传入 OBJ 等写入函数。"""
+    """导出选项：坐标系预设、法线/绕序、UV 垂直翻转等。"""
 
     UP_Z = "Z"
     UP_Y = "Y"
 
+    # 坐标系预设 id（写入缓存）
+    COORD_OPENGL = "opengl"
+    COORD_MAYA = "maya"
+    COORD_BLENDER = "blender"
+    COORD_UNREAL = "unreal"
+    COORD_D3D_RAW = "d3d_raw"
+    COORD_LEGACY_Z = "legacy_z"
+
+    COORD_PRESET_OPTIONS = (
+        (COORD_OPENGL, "OpenGL（右手 Y-up）"),
+        (COORD_MAYA, "Maya（右手 Y-up）"),
+        (COORD_BLENDER, "Blender（右手 Z-up）"),
+        (COORD_UNREAL, "Unreal Engine（左手 Z-up）"),
+        (COORD_D3D_RAW, "原数据（D3D 左手 Y-up）"),
+    )
+
+    _VALID_COORD_PRESETS = frozenset(
+        opt[0] for opt in COORD_PRESET_OPTIONS
+    ) | frozenset([COORD_LEGACY_Z])
+
     def __init__(
         self,
         *,
-        up_axis: str = "Z",
-        flip_normals: bool = True,
-        flip_winding: bool = True,
-        flip_uv_v: bool = False,
-    ) -> None:
-        self.up_axis = up_axis if up_axis in (self.UP_Z, self.UP_Y) else self.UP_Z
+        coord_preset=None,
+        up_axis=None,
+        flip_normals=True,
+        flip_winding=True,
+        flip_uv_v=False,
+        uniform_scale=1.0,
+    ):
+        if coord_preset is not None:
+            self.coord_preset = (
+                coord_preset
+                if coord_preset in self._VALID_COORD_PRESETS
+                else self.COORD_OPENGL
+            )
+        elif up_axis == self.UP_Z:
+            self.coord_preset = self.COORD_LEGACY_Z
+        elif up_axis == self.UP_Y:
+            self.coord_preset = self.COORD_D3D_RAW
+        else:
+            self.coord_preset = self.COORD_OPENGL
+
         self.flip_normals = flip_normals
         self.flip_winding = flip_winding
         self.flip_uv_v = flip_uv_v
+        try:
+            scale = float(uniform_scale)
+        except (TypeError, ValueError):
+            scale = 1.0
+        self.uniform_scale = scale if scale > 0.0 else 1.0
 
-    def transform_uv(self, u: float, v: float) -> Tuple[float, float]:
+    @property
+    def up_axis(self):
+        """兼容 OBJ 注释等：Z-up 预设返回 Z，其余返回 Y。"""
+        if self.coord_preset in (self.COORD_BLENDER, self.COORD_UNREAL, self.COORD_LEGACY_Z):
+            return self.UP_Z
+        return self.UP_Y
+
+    @classmethod
+    def label_for_preset(cls, preset_id):
+        for pid, label in cls.COORD_PRESET_OPTIONS:
+            if pid == preset_id:
+                return label
+        if preset_id == cls.COORD_LEGACY_Z:
+            return "旧版 Z 轴向上"
+        return cls.COORD_PRESET_OPTIONS[0][1]
+
+    def transform_uv(self, u, v):
         """垂直翻转 UV：对 V 做 1-v（常见图像坐标与渲染 UV 轴向对齐）。"""
         u, v = float(u), float(v)
         if self.flip_uv_v:
             v = 1.0 - v
         return (u, v)
 
-    def transform_xyz(self, x: float, y: float, z: float) -> Tuple[float, float, float]:
-        """选 Z 轴向上：不旋转。选 Y 轴向上：绕 Y 轴旋转 +90°（右手系，弧度 π/2）。"""
-        if self.up_axis == self.UP_Y:
-            return (float(x), float(y), float(z))
-        return (float(y), float(-x), float(z))
+    def transform_xyz(self, x, y, z):
+        """兼容旧调用：等同 transform_position。"""
+        return self.transform_position(x, y, z)
+
+    def _transform_coord(self, x, y, z):
+        """
+        将 D3D VS Input 常见左手 Y-up 对象空间，变换到目标坐标系（不含缩放）。
+        """
+        x, y, z = float(x), float(y), float(z)
+        preset = self.coord_preset
+
+        if preset == self.COORD_D3D_RAW:
+            return (x, y, z)
+        if preset in (self.COORD_OPENGL, self.COORD_MAYA):
+            return (x, y, -z)
+        if preset == self.COORD_BLENDER:
+            return (x, -z, y)
+        if preset == self.COORD_UNREAL:
+            return (x, z, y)
+        if preset == self.COORD_LEGACY_Z:
+            return (y, -x, z)
+        return (x, y, -z)
+
+    def transform_position(self, x, y, z):
+        """位置：坐标系变换后乘统一缩放。"""
+        tx, ty, tz = self._transform_coord(x, y, z)
+        s = self.uniform_scale
+        return (tx * s, ty * s, tz * s)
+
+    def transform_direction(self, x, y, z):
+        """法线 / 切线：仅坐标系变换，不缩放。"""
+        return self._transform_coord(x, y, z)
 
 class Vec:
     x: float = 0
