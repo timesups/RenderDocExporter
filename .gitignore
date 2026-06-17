@@ -2,3 +2,4 @@
 *.pyc
 *.csv
 /aspose
+export_mapping_cache.json
