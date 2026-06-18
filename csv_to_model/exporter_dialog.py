@@ -11,10 +11,13 @@ current_folder = Path(__file__).absolute().parent
 father_folder = str(current_folder.parent)
 sys.path.append(father_folder)
 
-from .util import DataColumnTypeMap, DataType, ExportConfig
+from .util import DataColumnTypeMap, DataType, ExportConfig, normalize_decode_mode
 
 _CACHE_PATH = current_folder.parent / "export_mapping_cache.json"
 _CACHE_VERSION = 1
+
+DECODE_MODE_OPTIONS = ["Float", "UInt", "Int"]
+DEFAULT_DECODE_MODE = "Float"
 
 
 def _data_type_from_option_label(label: str) -> int:
@@ -38,6 +41,11 @@ def _header_semantic_rank(header: str) -> int:
     if "uv" in low or "texcoord" in low or "tex" in low:
         return 4
     return 5
+
+
+def _decode_mode_label(mode: str) -> str:
+    mode = normalize_decode_mode(mode)
+    return {"float": "Float", "uint": "UInt", "int": "Int"}.get(mode, DEFAULT_DECODE_MODE)
 
 
 def _sort_attribute_headers(headers: List[str]) -> List[str]:
@@ -81,8 +89,11 @@ def _save_mapping_cache(
         "export_settings": export_settings,
     }
     try:
-        with open(_CACHE_PATH, "w", encoding="utf-8") as f:
+        _CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = _CACHE_PATH.with_suffix(".json.tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(payload, f, ensure_ascii=False, indent=2)
+        tmp_path.replace(_CACHE_PATH)
     except Exception:
         pass
 
@@ -92,6 +103,7 @@ class ModelExportDialog:
     mqt = None
     data_types = ["None", "Position", "Normal", "Tangent", "Color", "UV"]
     coord_preset_ids = [pid for pid, _ in ExportConfig.COORD_PRESET_OPTIONS]
+    coord_preset_labels = [label for _, label in ExportConfig.COORD_PRESET_OPTIONS]
     default_coord_preset = ExportConfig.COORD_OPENGL
     default_uniform_scale = 1.0
     # 与历史 OBJ 导出默认一致：从 D3D VS Input 导出时通常需要法线取反 + 交换绕序
@@ -103,10 +115,16 @@ class ModelExportDialog:
         self.mqt = emgr_.GetMiniQtHelper()
         self.data_headers = _sort_attribute_headers(data_headers)
         self._header_to_option = {}
+        self._header_to_decode_mode = {}
         self.header_combos = []
+        self.header_decode_combos = []
         cache = _load_mapping_cache()
         self._cached_header_mappings = cache["header_mappings"]
         self._cached_export_settings = cache["export_settings"]
+        cached_decode = self._cached_export_settings.get("header_decode_modes", {})
+        self._cached_decode_modes = (
+            cached_decode if isinstance(cached_decode, dict) else {}
+        )
         self._coord_preset = self._load_cached_coord_preset()
         self._coord_preset_label = self._load_cached_coord_preset_label()
         self._uniform_scale = self._cached_float(
@@ -176,7 +194,19 @@ class ModelExportDialog:
         return ExportConfig.label_for_preset(self._coord_preset)
 
     def _on_coord_preset_changed(self, text):
-        self._apply_coord_preset(self._preset_id_from_combo_text(text))
+        text = str(text).strip()
+        if not text:
+            return
+        if text in ExportConfig._VALID_COORD_PRESETS:
+            self._apply_coord_preset(text)
+            return
+        for pid, label in ExportConfig.COORD_PRESET_OPTIONS:
+            if text == label:
+                self._apply_coord_preset(pid)
+                return
+        pid = self._preset_id_from_label(text)
+        if pid in ExportConfig._VALID_COORD_PRESETS:
+            self._apply_coord_preset(pid)
 
     def _guess_default_option(self, header: str) -> str:
         rank = _header_semantic_rank(header)
@@ -197,6 +227,36 @@ class ModelExportDialog:
         if cached in self.data_types:
             return cached
         return self._guess_default_option(header)
+
+    def _resolve_default_decode_mode(self, header: str) -> str:
+        cached = self._cached_decode_modes.get(header)
+        if cached is not None:
+            return _decode_mode_label(cached)
+        return DEFAULT_DECODE_MODE
+
+    def _store_decode_mode(self, header: str, option_text: str) -> None:
+        text = str(option_text).strip()
+        if not text:
+            return
+        self._header_to_decode_mode[header] = text
+
+    def _sync_header_decode_modes_from_ui(self) -> None:
+        for header, combo in self.header_decode_combos:
+            try:
+                text = str(self.mqt.GetWidgetText(combo)).strip()
+                if text:
+                    self._store_decode_mode(header, text)
+            except Exception:
+                pass
+
+    def get_decode_mode_map(
+        self, sizes: Optional[Dict[str, int]] = None
+    ) -> Dict[str, str]:
+        keys = list(sizes.keys()) if sizes is not None else list(self.data_headers)
+        return {
+            k: normalize_decode_mode(self._header_to_decode_mode.get(k, "float"))
+            for k in keys
+        }
 
     def _cached_bool(self, key, default):
         value = self._cached_export_settings.get(key, default)
@@ -230,14 +290,24 @@ class ModelExportDialog:
         }
 
     def _sync_coord_preset_from_ui(self):
-        """从 MiniQt 下拉框读取预设 id（ASCII）；读不到或与当前不一致时不误覆盖。"""
+        """从 MiniQt 下拉框读取坐标系预设；读不到时保留当前值。"""
         combo = self._coord_preset_combo
         if combo is None:
             return
         try:
             text = str(self.mqt.GetWidgetText(combo)).strip()
-            if text in self.coord_preset_ids:
-                self._apply_coord_preset(text, update_desc=True)
+            if not text:
+                return
+            if text in ExportConfig._VALID_COORD_PRESETS:
+                self._apply_coord_preset(text)
+                return
+            for pid, label in ExportConfig.COORD_PRESET_OPTIONS:
+                if text == label:
+                    self._apply_coord_preset(pid)
+                    return
+            pid = self._preset_id_from_label(text)
+            if pid in ExportConfig._VALID_COORD_PRESETS:
+                self._apply_coord_preset(pid)
         except Exception:
             pass
 
@@ -252,11 +322,16 @@ class ModelExportDialog:
             pass
 
     def _build_export_settings_dict(self):
+        self._sync_header_decode_modes_from_ui()
         return {
             "coord_preset": self._coord_preset,
             "coord_preset_label": self._coord_preset_label,
             "up_axis": ExportConfig(coord_preset=self._coord_preset).up_axis,
             "uniform_scale": float(self._uniform_scale),
+            "header_decode_modes": {
+                str(k): normalize_decode_mode(v)
+                for k, v in self._header_to_decode_mode.items()
+            },
             "flip_normals": bool(
                 self.mqt.IsWidgetChecked(self._chk_flip_normals)
             )
@@ -295,6 +370,7 @@ class ModelExportDialog:
         self.mqt.AddWidget(self.widget, data_map_container)
 
         self.header_combos = []
+        self.header_decode_combos = []
         for header in self.data_headers:
             row = self.mqt.CreateHorizontalContainer()
 
@@ -310,10 +386,21 @@ class ModelExportDialog:
             default_opt = self._resolve_default_option(str(header))
             self.mqt.SelectComboOption(combo, default_opt)
             self._store_header_option(header, default_opt)
-
             self.mqt.AddWidget(row, combo)
+
+            decode_combo = self.mqt.CreateComboBox(
+                False,
+                lambda ctx, w, text, h=header: self._store_decode_mode(h, str(text)),
+            )
+            self.mqt.SetComboOptions(decode_combo, DECODE_MODE_OPTIONS)
+            default_decode = self._resolve_default_decode_mode(str(header))
+            self.mqt.SelectComboOption(decode_combo, default_decode)
+            self._store_decode_mode(header, default_decode)
+            self.mqt.AddWidget(row, decode_combo)
+
             self.mqt.AddWidget(data_map_container, row)
             self.header_combos.append((header, combo))
+            self.header_decode_combos.append((header, decode_combo))
 
         export_title = self.mqt.CreateLabel()
         self.mqt.SetWidgetText(export_title, "导出设置")
@@ -327,20 +414,21 @@ class ModelExportDialog:
             False,
             lambda ctx, w, text: self._on_coord_preset_changed(str(text)),
         )
-        self.mqt.SetComboOptions(coord_combo, self.coord_preset_ids)
         self._coord_preset_combo = coord_combo
-        combo_id = (
+        preset_id = (
             self._coord_preset
             if self._coord_preset in self.coord_preset_ids
             else self.default_coord_preset
         )
-        self.mqt.SelectComboOption(coord_combo, combo_id)
+        preset_label = ExportConfig.label_for_preset(preset_id)
+        # SetComboOptions 清空列表时会触发 currentTextChanged("")，须先取缓存再设选项
+        self.mqt.SetComboOptions(coord_combo, self.coord_preset_labels)
+        self.mqt.SelectComboOption(coord_combo, preset_label)
         self.mqt.AddWidget(export_settings_row, coord_combo)
         coord_desc = self.mqt.CreateLabel()
         self._coord_preset_desc_label = coord_desc
-        self.mqt.SetWidgetText(coord_desc, self._coord_preset_label)
         self.mqt.AddWidget(export_settings_row, coord_desc)
-        self._apply_coord_preset(self._coord_preset, update_desc=True)
+        self._apply_coord_preset(preset_id, update_desc=True)
         self.mqt.AddWidget(self.widget, export_settings_row)
 
         scale_row = self.mqt.CreateHorizontalContainer()
@@ -401,6 +489,7 @@ class ModelExportDialog:
     def button_accept(self, context_, widget_, text_):
         self._sync_coord_preset_from_ui()
         self._sync_uniform_scale_from_ui()
+        self._sync_header_decode_modes_from_ui()
         _save_mapping_cache(
             dict(self._header_to_option),
             self._build_export_settings_dict(),

@@ -3,6 +3,22 @@ from typing import Dict, List, Sequence, Tuple, Union, overload
 # 属性基名 -> DataType 整型，与 get_data_from_eid(..., data_map) 一致
 DataColumnTypeMap = Dict[str, int]
 
+DECODE_FLOAT = "float"
+DECODE_UINT = "uint"
+DECODE_INT = "int"
+VALID_DECODE_MODES = frozenset((DECODE_FLOAT, DECODE_UINT, DECODE_INT))
+
+
+def normalize_decode_mode(mode):
+    text = str(mode).strip().lower()
+    if text in VALID_DECODE_MODES:
+        return text
+    if text in ("sint", "signed"):
+        return DECODE_INT
+    if text in ("uint", "unsigned"):
+        return DECODE_UINT
+    return DECODE_FLOAT
+
 
 class ExportConfig:
     """导出选项：坐标系预设、法线/绕序、UV 垂直翻转等。"""

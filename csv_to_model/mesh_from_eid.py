@@ -5,7 +5,7 @@ from typing import Callable, Dict, List, Mapping, Optional, Tuple
 
 import renderdoc as rd
 
-from .util import DataColumnTypeMap, DataType, Vec, Vertex
+from .util import DataColumnTypeMap, DataType, Vec, Vertex, normalize_decode_mode
 from .vertex_decode import element_size, unpack_vertex_data
 
 
@@ -132,9 +132,11 @@ def get_data_from_eid(
     size_map,
     data_map,
     on_progress=None,
+    decode_mode_map=None,
 ):
     """从当前 EID 解码 VS Input 顶点与索引。"""
     result = {"vertices": [], "indices": []}
+    decode_mode_map = decode_mode_map or {}
 
     def _fetch(controller):
         eid = pyrenderdoc_.CurEvent()
@@ -157,7 +159,9 @@ def get_data_from_eid(
             offset = attr.vertexByteOffset + attr.vertexByteStride * idx
             size = element_size(attr.format)
             data = vb_cache[rid][offset : offset + size]
-            return unpack_vertex_data(attr.format, data)
+            base = attr.name.split(".")[0]
+            mode = normalize_decode_mode(decode_mode_map.get(base, "float"))
+            return unpack_vertex_data(attr.format, data, decode_mode=mode)
 
         vertices = []
         indices = []

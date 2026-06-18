@@ -1,9 +1,13 @@
-"""顶点解码：先按 Float 解包，出现 NaN/Inf 则回退 UInt（asfloat 位模式，供着色器 asuint 还原）。"""
+"""顶点解码：按 compType 选择 Float / UNorm / SNorm / UInt(asfloat) 等路径。"""
 
 import math
 import struct
 
 import renderdoc as rd
+
+from .util import DECODE_FLOAT, DECODE_INT, DECODE_UINT, normalize_decode_mode
+
+VALID_DECODE_MODES = frozenset((DECODE_FLOAT, DECODE_UINT, DECODE_INT))
 
 
 def element_size(fmt):
@@ -63,6 +67,55 @@ def _uint_char(byte_width):
     return None if ch == "x" else ch
 
 
+def _signed_char(byte_width):
+    chars = "xbhxixxl"
+    if byte_width < 0 or byte_width >= len(chars):
+        return None
+    ch = chars[byte_width]
+    return None if ch == "x" else ch
+
+
+def _comp_type(fmt):
+    try:
+        return fmt.compType
+    except Exception:
+        return None
+
+
+def _apply_bgra_order(fmt, value):
+    if fmt.BGRAOrder() and len(value) >= 4:
+        return tuple(value[i] for i in [2, 1, 0, 3])
+    return value
+
+
+def _read_regular_raw(fmt, data):
+    byte_width = int(fmt.compByteWidth)
+    comp_count = int(fmt.compCount)
+    ch = _uint_char(byte_width)
+    if ch is None:
+        for bw in (4, 2, 1, 8):
+            ch = _uint_char(bw)
+            if ch is not None:
+                byte_width = bw
+                break
+    if ch is None:
+        return None, None
+
+    vertex_format = str(comp_count) + ch
+    if struct.calcsize(vertex_format) > len(data):
+        return None, None
+
+    return struct.unpack_from(vertex_format, data, 0), byte_width
+
+
+def _signed_from_unsigned(u, bit_width):
+    bits = int(u) & ((1 << bit_width) - 1)
+    sign = 1 << (bit_width - 1)
+    if bits & sign:
+        bits -= 1 << bit_width
+    return bits
+
+
 def _half_bits_to_float(h):
     h = int(h) & 0xFFFF
     sign = (h >> 15) & 1
@@ -96,33 +149,99 @@ def _decode_regular_float(fmt, data):
         raise RuntimeError("顶点数据长度不足")
 
     value = tuple(float(v) for v in struct.unpack_from(vertex_format, data, 0))
-    if fmt.BGRAOrder() and len(value) >= 4:
-        value = tuple(value[i] for i in [2, 1, 0, 3])
-    return value
+    return _apply_bgra_order(fmt, value)
 
 
-def _decode_regular_uint(fmt, data):
+def _decode_regular_unorm(fmt, data):
+    raw, byte_width = _read_regular_raw(fmt, data)
+    if raw is None:
+        raise RuntimeError("无法按 UNorm 解码")
+
+    bit_width = byte_width * 8
+    max_val = float((1 << bit_width) - 1)
+    value = tuple(float(v) / max_val for v in raw)
+    return _apply_bgra_order(fmt, value)
+
+
+def _decode_regular_snorm(fmt, data):
+    raw, byte_width = _read_regular_raw(fmt, data)
+    if raw is None:
+        raise RuntimeError("无法按 SNorm 解码")
+
+    bit_width = byte_width * 8
+    denom = float((1 << (bit_width - 1)) - 1)
+    value = tuple(
+        max(-1.0, min(1.0, _signed_from_unsigned(v, bit_width) / denom))
+        for v in raw
+    )
+    return _apply_bgra_order(fmt, value)
+
+
+def _decode_regular_sint(fmt, data):
     byte_width = int(fmt.compByteWidth)
     comp_count = int(fmt.compCount)
-    ch = _uint_char(byte_width)
+    ch = _signed_char(byte_width)
     if ch is None:
-        for bw in (4, 2, 1, 8):
-            ch = _uint_char(bw)
-            if ch is not None:
-                byte_width = bw
-                break
-    if ch is None:
-        return None
+        raw, byte_width = _read_regular_raw(fmt, data)
+        if raw is None:
+            raise RuntimeError("无法按 SInt 解码")
+        bit_width = byte_width * 8
+        value = tuple(float(_signed_from_unsigned(v, bit_width)) for v in raw)
+        return _apply_bgra_order(fmt, value)
 
     vertex_format = str(comp_count) + ch
     if struct.calcsize(vertex_format) > len(data):
+        raise RuntimeError("顶点数据长度不足")
+
+    value = tuple(float(v) for v in struct.unpack_from(vertex_format, data, 0))
+    return _apply_bgra_order(fmt, value)
+
+
+def _decode_regular_uint(fmt, data):
+    raw, byte_width = _read_regular_raw(fmt, data)
+    if raw is None:
         return None
 
-    raw = struct.unpack_from(vertex_format, data, 0)
     bit_width = byte_width * 8
     value = _uint_tuple_as_shader_float(raw, bit_width)
-    if fmt.BGRAOrder() and len(value) >= 4:
-        value = tuple(value[i] for i in [2, 1, 0, 3])
+    return _apply_bgra_order(fmt, value)
+
+
+def _decode_regular(fmt, data):
+    comp_type = _comp_type(fmt)
+
+    if comp_type in (rd.CompType.UNorm, rd.CompType.UNormSRGB):
+        return _decode_regular_unorm(fmt, data)
+    if comp_type == rd.CompType.SNorm:
+        return _decode_regular_snorm(fmt, data)
+    if comp_type == rd.CompType.UInt:
+        value = _decode_regular_uint(fmt, data)
+        if value is None:
+            raise RuntimeError("无法按 UInt 解码")
+        return value
+    if comp_type == rd.CompType.SInt:
+        return _decode_regular_sint(fmt, data)
+    if comp_type in (rd.CompType.UScaled, rd.CompType.SScaled):
+        raw, _byte_width = _read_regular_raw(fmt, data)
+        if raw is None:
+            raise RuntimeError("无法按 Scaled 整型解码")
+        return _apply_bgra_order(fmt, tuple(float(v) for v in raw))
+
+    try:
+        value = _decode_regular_float(fmt, data)
+    except Exception:
+        value = (float("nan"),)
+
+    # Typeless / Depth / 未知：保留 Float 失败时 asfloat 回退（着色器位模式）
+    if _has_bad_float(value) and comp_type in (
+        None,
+        rd.CompType.Typeless,
+        rd.CompType.Depth,
+    ):
+        alt = _decode_regular_uint(fmt, data)
+        if alt is not None:
+            value = alt
+
     return value
 
 
@@ -288,8 +407,26 @@ def _decode_special_uint(fmt, data):
     return None
 
 
-def unpack_vertex_data(fmt, data):
-    """先 Float 解包，含 NaN/Inf 时回退 UInt（asfloat 位模式）。"""
+def _decode_special_int(fmt, data):
+    fmt_type = fmt.type
+    if fmt_type == rd.ResourceFormatType.A8:
+        v = data[0] if data else 0
+        if v >= 128:
+            v -= 256
+        return (float(v),)
+    try:
+        return _decode_regular_sint(fmt, data)
+    except Exception:
+        pass
+    try:
+        return _decode_special_float(fmt, data)
+    except Exception:
+        return (float("nan"),)
+
+
+def unpack_vertex_data(fmt, data, decode_mode=DECODE_FLOAT):
+    """按 RenderDoc compType 或用户指定的 decode_mode 解包顶点分量。"""
+    decode_mode = normalize_decode_mode(decode_mode)
     size = element_size(fmt)
     if size <= 0:
         raise RuntimeError("无效的顶点属性格式大小")
@@ -297,24 +434,36 @@ def unpack_vertex_data(fmt, data):
     count = int(fmt.compCount)
 
     if fmt.Special():
-        try:
-            value = _decode_special_float(fmt, chunk)
-        except Exception:
-            value = (float("nan"),)
-        if _has_bad_float(value):
-            alt = _decode_special_uint(fmt, chunk)
-            if alt is not None:
-                value = alt
+        if decode_mode == DECODE_UINT:
+            value = _decode_special_uint(fmt, chunk)
+            if value is None:
+                value = (float("nan"),)
+        elif decode_mode == DECODE_INT:
+            value = _decode_special_int(fmt, chunk)
+        else:
+            try:
+                value = _decode_special_float(fmt, chunk)
+            except Exception:
+                value = (float("nan"),)
+            if _has_bad_float(value) and _comp_type(fmt) == rd.CompType.UInt:
+                alt = _decode_special_uint(fmt, chunk)
+                if alt is not None:
+                    value = alt
         return _fit_comp_count(value, count)
 
-    try:
-        value = _decode_regular_float(fmt, chunk)
-    except Exception:
-        value = (float("nan"),)
-
-    if _has_bad_float(value):
-        alt = _decode_regular_uint(fmt, chunk)
-        if alt is not None:
-            value = alt
+    if decode_mode == DECODE_UINT:
+        value = _decode_regular_uint(fmt, chunk)
+        if value is None:
+            value = (float("nan"),)
+    elif decode_mode == DECODE_INT:
+        try:
+            value = _decode_regular_sint(fmt, chunk)
+        except Exception:
+            value = (float("nan"),)
+    else:
+        try:
+            value = _decode_regular(fmt, chunk)
+        except Exception:
+            value = (float("nan"),)
 
     return _fit_comp_count(value, count)

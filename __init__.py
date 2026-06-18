@@ -61,6 +61,7 @@ def ExportFbx(pyrenderdoc_, data_):
         return
 
     data_map = dialog.get_data_map(size_map)
+    decode_mode_map = dialog.get_decode_mode_map(size_map)
     export_cfg = dialog.get_export_config()
 
     save_path = emgr.SaveFileName(
@@ -96,6 +97,7 @@ def ExportFbx(pyrenderdoc_, data_):
             size_map,
             data_map,
             on_progress=on_read_rows,
+            decode_mode_map=decode_mode_map,
         )
     except InterruptedError:
         emgr.MessageDialog("已取消导出", "Info")
