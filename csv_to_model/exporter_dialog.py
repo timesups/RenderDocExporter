@@ -147,6 +147,8 @@ class ModelExportDialog:
                 return ExportConfig.COORD_MAYA
             if "blender" in low:
                 return ExportConfig.COORD_BLENDER
+            if "3dsmax" in low or "3ds max" in low or "3d max" in low or "3dmax" in low:
+                return ExportConfig.COORD_3DSMAX
             if "unreal" in low or "ue" in low:
                 return ExportConfig.COORD_UNREAL
             if "d3d" in low or "原数据" in label:

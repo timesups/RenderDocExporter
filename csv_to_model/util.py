@@ -30,6 +30,7 @@ class ExportConfig:
     COORD_OPENGL = "opengl"
     COORD_MAYA = "maya"
     COORD_BLENDER = "blender"
+    COORD_3DSMAX = "3dsmax"
     COORD_UNREAL = "unreal"
     COORD_D3D_RAW = "d3d_raw"
     COORD_LEGACY_Z = "legacy_z"
@@ -38,6 +39,7 @@ class ExportConfig:
         (COORD_OPENGL, "OpenGL（右手 Y-up）"),
         (COORD_MAYA, "Maya（右手 Y-up）"),
         (COORD_BLENDER, "Blender（右手 Z-up）"),
+        (COORD_3DSMAX, "3ds Max（右手 Z-up）"),
         (COORD_UNREAL, "Unreal Engine（左手 Z-up）"),
         (COORD_D3D_RAW, "原数据（D3D 左手 Y-up）"),
     )
@@ -81,7 +83,12 @@ class ExportConfig:
     @property
     def up_axis(self):
         """兼容 OBJ 注释等：Z-up 预设返回 Z，其余返回 Y。"""
-        if self.coord_preset in (self.COORD_BLENDER, self.COORD_UNREAL, self.COORD_LEGACY_Z):
+        if self.coord_preset in (
+            self.COORD_BLENDER,
+            self.COORD_3DSMAX,
+            self.COORD_UNREAL,
+            self.COORD_LEGACY_Z,
+        ):
             return self.UP_Z
         return self.UP_Y
 
@@ -116,7 +123,7 @@ class ExportConfig:
             return (x, y, z)
         if preset in (self.COORD_OPENGL, self.COORD_MAYA):
             return (x, y, -z)
-        if preset == self.COORD_BLENDER:
+        if preset in (self.COORD_BLENDER, self.COORD_3DSMAX):
             return (x, -z, y)
         if preset == self.COORD_UNREAL:
             return (x, z, y)
