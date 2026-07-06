@@ -24,7 +24,7 @@ def _get_mesh_inputs(controller, draw):
         if attr is None:
             continue
         if attr.perInstance:
-            raise RuntimeError("暂不支持实例化顶点属性")
+            continue
 
         vb_idx = attr.vertexBuffer
         if vb_idx < 0 or vb_idx >= len(vbs):

@@ -42,7 +42,7 @@ RenderDoc 扩展（**Renderdoc Exporter** v1.1）：从当前选中的 **Draw Ca
 - 导出 EID 为 Event Browser 当前光标所在事件（`CurEvent()`）
 - 属性列表按语义优先级排序（Position → Normal → Tangent → Color → UV → 其它）
 - 无缓存时，插件会根据属性名自动猜测默认映射（如含 `position` → Position）
-- 仅支持非实例化（`perInstance`）的 VS Input；当前 EID 须为有效 Draw Call 且含索引数据
+- 实例化顶点属性（`perInstance`）会被忽略，仅导出实例化前的基础网格；当前 EID 须为有效 Draw Call 且含索引数据
 
 ## 导出设置
 
@@ -162,7 +162,7 @@ RenderDocExporter/
 
 ## 已知限制
 
-- 不支持实例化顶点属性（`perInstance`）
+- 不导出实例化顶点属性（`perInstance`），仅保留 per-vertex 基础网格
 - 不支持压缩/非 VS Input 数据源；须从当前 Draw Call 的 VS Input 读取
 - FBX 顶点属性均为 float；大于 32 位的整型需自行拆分通道
 - 扩展热重载可能加载旧版模块；更新代码后请重启 RenderDoc
