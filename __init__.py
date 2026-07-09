@@ -131,9 +131,37 @@ def ExportFbx(pyrenderdoc_, data_):
         emgr.MessageDialog("已取消导出", "Info")
         return
 
+    progress.setLabelText("正在导出着色器输入贴图…")
+    progress.setValue(92)
+    _process_ui_events()
+
+    from .csv_to_model.texture_exporter import export_textures_for_eid, texture_output_dir_for_model
+
+    tex_files = []
+    tex_errors = []
+    tex_dir = ""
+    try:
+        tex_dir = texture_output_dir_for_model(save_path)
+        tex_files, tex_errors = export_textures_for_eid(
+            pyrenderdoc_, tex_dir, eid=eid
+        )
+    except Exception as exc:
+        import traceback
+
+        tex_errors = ["贴图导出失败: %s" % exc, traceback.format_exc()]
+
     progress.setValue(100)
     progress.setLabelText("完成")
     _process_ui_events()
 
-    emgr.MessageDialog(f"导出成功\n{written_msg}", "Info")
+    msg_parts = ["导出成功", written_msg]
+    if tex_files:
+        msg_parts.append("\n贴图目录:\n%s" % tex_dir)
+        msg_parts.append("\n".join(tex_files))
+    elif not tex_errors:
+        msg_parts.append("\n（当前 EID 未绑定可导出的输入贴图）")
+    if tex_errors:
+        msg_parts.append("\n贴图导出警告:\n" + "\n".join(tex_errors))
+
+    emgr.MessageDialog("\n".join(msg_parts), "Info")
 

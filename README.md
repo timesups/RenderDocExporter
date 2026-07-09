@@ -2,6 +2,8 @@
 
 RenderDoc 扩展（**Renderdoc Exporter** v1.1）：从当前选中的 **Draw Call（EID）** 经 Replay API 读取 **VS Input** 顶点数据，导出为 **FBX** 或 **OBJ** 模型。
 
+![插件UI预览](images/c688a8b2fbda89594669e82a918fa462.png)
+
 ## 功能概览
 
 - 支持 **FBX**（二进制 7.5，Aspose.3D）与 **OBJ**（多 UV 通道分文件）导出
@@ -11,6 +13,7 @@ RenderDoc 扩展（**Renderdoc Exporter** v1.1）：从当前选中的 **Draw Ca
 - 统一缩放、反转法线、反转绕序、垂直翻转 UV
 - 映射、解码方式、坐标系与导出选项写入本地缓存，下次打开自动恢复
 - 导出过程带进度条，支持取消
+- 导出模型时**自动**导出当前 Draw 所用 shader 的输入贴图（PNG）
 
 ## 环境要求
 
@@ -35,7 +38,7 @@ RenderDoc 扩展（**Renderdoc Exporter** v1.1）：从当前选中的 **Draw Ca
    - 为各 VS Input 选择解码方式（Float / UInt / Int）
    - 设置坐标系预设、统一缩放、法线 / 绕序 / UV 选项
 4. 点击 **确认**，选择保存路径（`.fbx` 或 `.obj`）
-5. 等待进度条完成
+5. 等待进度条完成；模型旁会自动生成 `<模型名>_textures/` 目录及贴图 PNG
 
 **说明：**
 
@@ -89,6 +92,33 @@ RenderDoc 扩展（**Renderdoc Exporter** v1.1）：从当前选中的 **Draw Ca
 |------|------|
 | **FBX** | 单文件；多套 UV 写入不同 TextureMapping 语义 |
 | **OBJ** | 每个 UV 通道单独一个 `.obj` 文件（主文件名加后缀） |
+
+### 贴图导出
+
+导出 FBX/OBJ 成功后，会自动将当前 Draw Call 各着色器阶段（VS / HS / DS / GS / PS / CS）**实际绑定**的只读输入贴图保存为 PNG。
+
+| 项目 | 说明 |
+|------|------|
+| **输出目录** | 与模型同目录，`<模型文件名>_textures/`（如 `mesh.fbx` → `mesh_textures/`） |
+| **文件命名** | `{阶段}_{绑定名}.png`，如 `ps_tBaseMap.png`、`ps_tNormalMap.png` |
+| **去重** | 同一 `resourceId` 只导出一次；按 shader 贴图槽 `(stage, bind_name)` 合并 |
+
+**收集逻辑：**
+
+1. **优先读取当前 Draw EID 的管线绑定**（与 Event Browser 显示一致），通过三路宽口径合并：
+   - `GetReadOnlyResources(onlyUsed=False)`
+   - `GetDescriptorAccess` + `GetDescriptors`
+   - `GetAllUsedDescriptors(onlyUsed=False)`
+2. **UI 线程补充**：导出前在 UI 线程读取 `CurPipelineState`，作为回放线程的备用来源。
+3. **按 shader 过滤**：只保留当前 Draw 绑定的 VS/PS 等 shader 在 reflection 中声明、且 `isTexture=true` 的只读资源槽（如 `tBaseMap`），避免导出同 pass 内其它 Draw 遗留的无关贴图。
+4. **缺失槽位回溯**：若 Draw EID 上部分贴图槽未解析到，则从当前 Draw **向前**扫描至**上一个 Draw EID**（若无上次 Draw，则最多回溯 64 个 EID），**仅补全缺失槽位**，不把上一个 Draw 的全部贴图当作当前 Draw 的输入。
+5. **导出时刻**：PNG 始终在**当前 Draw EID** 回放状态下写入，保证贴图内容与本次 Draw 采样一致。
+
+**注意：**
+
+- 须选中**有效 Draw Call**（`numIndices > 0`）；`ExecuteIndirect` 等父标记（`numIndices=0`）需选中其子 Draw 节点。
+- 单张贴图导出失败不会中断整体流程，会在完成对话框中显示警告。
+- 更新扩展代码后请**完全重启 RenderDoc**，避免热重载导致 Python 模块不同步。
 
 ## 设置缓存
 
@@ -156,6 +186,8 @@ RenderDocExporter/
 │   ├── util.py                  # Vertex / ExportConfig / 坐标变换 / 解码模式
 │   ├── fbx_exporter.py          # FBX 写入（Aspose.3D）
 │   ├── obj_exporter.py          # OBJ 写入（多 UV 分文件）
+│   ├── bindings_util.py         # 收集 Draw 关联的 shader 输入贴图绑定
+│   ├── texture_exporter.py      # 贴图 PNG 导出（SaveTexture）
 │   └── exprorter.py             # 热重载兼容桩（转发 mesh_from_eid）
 └── aspose/                      # FBX 依赖（需自行放置）
 ```
@@ -164,9 +196,8 @@ RenderDocExporter/
 
 - 不导出实例化顶点属性（`perInstance`），仅保留 per-vertex 基础网格
 - 不支持压缩/非 VS Input 数据源；须从当前 Draw Call 的 VS Input 读取
+- 贴图导出依赖 RenderDoc 对 descriptor / shader reflection 的解析；bindless 或动态索引场景可能无法按绑定名匹配
 - FBX 顶点属性均为 float；大于 32 位的整型需自行拆分通道
 - 扩展热重载可能加载旧版模块；更新代码后请重启 RenderDoc
 
-## 作者
 
-zcx \<zcxtimesup@gmail.com\>（与 `extension.json` 中 author 一致）
