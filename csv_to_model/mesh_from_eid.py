@@ -72,14 +72,48 @@ def _get_indices(controller, mesh):
     index_format = str(mesh.numIndices) + index_format
 
     if mesh.indexResourceId != rd.ResourceId.Null():
+        byte_offset = mesh.indexByteOffset + mesh.indexOffset * mesh.indexByteStride
+        byte_count = mesh.numIndices * mesh.indexByteStride
         ibdata = controller.GetBufferData(
-            mesh.indexResourceId, mesh.indexByteOffset, 0
+            mesh.indexResourceId, byte_offset, byte_count
         )
-        offset = mesh.indexOffset * mesh.indexByteStride
-        indices = struct.unpack_from(index_format, ibdata, offset)
+        indices = struct.unpack_from(index_format, ibdata, 0)
         return [i + mesh.baseVertex for i in indices]
 
     return list(range(mesh.numIndices))
+
+
+def _load_vb_caches(controller, mesh_attrs, raw_indices, data_map):
+    """按索引范围按需读取顶点缓冲，避免 GetBufferData(rid, 0, 0) 全量加载。"""
+    if not raw_indices:
+        return {}
+
+    min_idx = min(raw_indices)
+    max_idx = max(raw_indices)
+    rid_ranges = {}
+
+    for attr in mesh_attrs:
+        base = attr.name.split(".")[0]
+        if base not in data_map:
+            continue
+        if data_map[base] == DataType.NoneType:
+            continue
+
+        rid = attr.vertexResourceId
+        stride = int(attr.vertexByteStride)
+        elem = element_size(attr.format)
+        start = int(attr.vertexByteOffset) + min_idx * stride
+        end = int(attr.vertexByteOffset) + max_idx * stride + elem
+        if rid not in rid_ranges:
+            rid_ranges[rid] = [start, end]
+        else:
+            rid_ranges[rid][0] = min(rid_ranges[rid][0], start)
+            rid_ranges[rid][1] = max(rid_ranges[rid][1], end)
+
+    vb_cache = {}
+    for rid, (lo, hi) in rid_ranges.items():
+        vb_cache[rid] = (controller.GetBufferData(rid, lo, hi - lo), lo)
+    return vb_cache
 
 
 def size_map_from_attributes(mesh_attrs):
@@ -96,6 +130,45 @@ def size_map_from_attributes(mesh_attrs):
     return sizes
 
 
+def _action_label(action):
+    if action is None:
+        return ""
+    for attr in ("customName", "name"):
+        value = getattr(action, attr, None)
+        if value:
+            return str(value)
+    return ""
+
+
+def _find_first_draw_eid(action):
+    """在动作子树中查找首个 numIndices > 0 的 Draw Call EID（迭代，避免深递归）。"""
+    queue = [action]
+    while queue:
+        node = queue.pop(0)
+        if node is None:
+            continue
+        if int(getattr(node, "numIndices", 0) or 0) > 0:
+            return int(node.eventId)
+        queue.extend(getattr(node, "children", None) or [])
+    return None
+
+
+def _format_no_indices_error(eid, draw):
+    child_eid = _find_first_draw_eid(draw)
+    label = _action_label(draw)
+    is_batch_marker = bool(
+        int(getattr(draw, "flags", 0) or 0) & int(rd.ActionFlags.MultiAction)
+    )
+    if child_eid is not None and (
+        is_batch_marker or "ExecuteIndirect" in label
+    ):
+        return (
+            "EID %d 是 ExecuteIndirect 等批次标记（numIndices=0），"
+            "请在 Event Browser 中选中子 Draw Call，例如 EID %d"
+        ) % (eid, child_eid)
+    return "EID %d 没有可导出的图元" % eid
+
+
 def probe_mesh_headers(pyrenderdoc_):
     """探测当前 EID 的 VS Input 顶点属性，返回 (size_map, error_message)。"""
     result = {"size_map": {}, "error": None}
@@ -107,7 +180,7 @@ def probe_mesh_headers(pyrenderdoc_):
             result["error"] = "EID %d 不是 Draw Call" % eid
             return
         if draw.numIndices <= 0:
-            result["error"] = "EID %d 没有可导出的图元" % eid
+            result["error"] = _format_no_indices_error(eid, draw)
             return
 
         controller.SetFrameEvent(eid, True)
@@ -143,6 +216,8 @@ def get_data_from_eid(
         draw = pyrenderdoc_.GetAction(eid)
         if draw is None:
             raise RuntimeError("EID %d 不是 Draw Call" % eid)
+        if draw.numIndices <= 0:
+            raise RuntimeError(_format_no_indices_error(eid, draw))
 
         controller.SetFrameEvent(eid, True)
         mesh_attrs = _get_mesh_inputs(controller, draw)
@@ -150,26 +225,23 @@ def get_data_from_eid(
             raise RuntimeError("未找到 VS Input 顶点属性")
 
         raw_indices = _get_indices(controller, mesh_attrs[0])
-        vb_cache = {}
+        vb_cache = _load_vb_caches(controller, mesh_attrs, raw_indices, data_map)
 
         def _read_attr(attr, idx):
             rid = attr.vertexResourceId
-            if rid not in vb_cache:
-                vb_cache[rid] = controller.GetBufferData(rid, 0, 0)
-            offset = attr.vertexByteOffset + attr.vertexByteStride * idx
+            data, cache_base = vb_cache[rid]
+            offset = attr.vertexByteOffset + attr.vertexByteStride * idx - cache_base
             size = element_size(attr.format)
-            data = vb_cache[rid][offset : offset + size]
+            chunk = data[offset : offset + size]
             base = attr.name.split(".")[0]
             mode = normalize_decode_mode(decode_mode_map.get(base, "float"))
-            return unpack_vertex_data(attr.format, data, decode_mode=mode)
+            return unpack_vertex_data(attr.format, chunk, decode_mode=mode)
 
         vertices = []
         indices = []
         idx_to_slot = {}
-        total = len(raw_indices)
-        report_every = max(1, total // 400) if total else 1
 
-        for i, idx in enumerate(raw_indices):
+        for idx in raw_indices:
             if idx not in idx_to_slot:
                 vertex = Vertex()
                 for attr in mesh_attrs:
@@ -185,11 +257,6 @@ def get_data_from_eid(
                 idx_to_slot[idx] = len(vertices)
                 vertices.append(vertex)
             indices.append(idx_to_slot[idx])
-
-            if on_progress is not None and (
-                i % report_every == 0 or i == total - 1
-            ):
-                on_progress(i + 1, total)
 
         result["vertices"] = vertices
         result["indices"] = indices

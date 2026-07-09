@@ -78,6 +78,9 @@ def ExportFbx(pyrenderdoc_, data_):
     progress.setWindowTitle("导出模型")
     progress.setWindowModality(QtCore.Qt.ApplicationModal)
     progress.setMinimumDuration(0)
+    progress.setRange(0, 0)
+    progress.setLabelText(f"正在读取 EID {eid} 网格数据（请稍候）…")
+    progress.setCancelButton(None)
     progress.show()
     _process_ui_events()
 
@@ -87,21 +90,18 @@ def ExportFbx(pyrenderdoc_, data_):
             raise InterruptedError()
 
     try:
-        def on_read_rows(cur: int, total: int) -> None:
-            _check_export_cancelled()
-            progress.setValue(int(85 * cur / max(total, 1)))
-            progress.setLabelText(f"读取网格：{cur} / {total} 索引")
-
         verts, idx = get_data_from_eid(
             pyrenderdoc_,
             size_map,
             data_map,
-            on_progress=on_read_rows,
             decode_mode_map=decode_mode_map,
         )
     except InterruptedError:
         emgr.MessageDialog("已取消导出", "Info")
         return
+
+    progress.setRange(0, 100)
+    progress.setCancelButtonText("取消")
 
     is_fbx = save_path.lower().endswith(".fbx")
     progress.setLabelText(

@@ -42,7 +42,7 @@ RenderDoc 扩展（**Renderdoc Exporter** v1.1）：从当前选中的 **Draw Ca
 - 导出 EID 为 Event Browser 当前光标所在事件（`CurEvent()`）
 - 属性列表按语义优先级排序（Position → Normal → Tangent → Color → UV → 其它）
 - 无缓存时，插件会根据属性名自动猜测默认映射（如含 `position` → Position）
-- 实例化顶点属性（`perInstance`）会被忽略，仅导出实例化前的基础网格；当前 EID 须为有效 Draw Call 且含索引数据
+- 实例化顶点属性（`perInstance`）会被忽略，仅导出实例化前的基础网格；`ExecuteIndirect` 等批次标记（numIndices=0）需选中其子 Draw Call；当前 EID 须为有效 Draw Call 且含索引数据
 
 ## 导出设置
 
