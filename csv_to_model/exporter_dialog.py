@@ -109,6 +109,7 @@ class ModelExportDialog:
     # 与历史 OBJ 导出默认一致：从 D3D VS Input 导出时通常需要法线取反 + 交换绕序
     default_flip_normals = True
     default_flip_winding = True
+    default_export_textures = True
 
     def __init__(self, emgr_, data_headers):
         self.emgr = emgr_
@@ -132,6 +133,7 @@ class ModelExportDialog:
         )
         self._chk_flip_normals = None
         self._chk_flip_winding = None
+        self._chk_export_textures = None
         self._coord_preset_combo = None
         self._coord_preset_desc_label = None
 
@@ -347,6 +349,11 @@ class ModelExportDialog:
             "flip_uv_v": bool(self.mqt.IsWidgetChecked(self._chk_flip_u))
             if getattr(self, "_chk_flip_u", None) is not None
             else False,
+            "export_textures": bool(
+                self.mqt.IsWidgetChecked(self._chk_export_textures)
+            )
+            if self._chk_export_textures is not None
+            else self.default_export_textures,
         }
 
     def get_export_config(self) -> ExportConfig:
@@ -360,6 +367,11 @@ class ModelExportDialog:
             flip_uv_v=settings["flip_uv_v"],
             uniform_scale=settings["uniform_scale"],
         )
+
+    def should_export_textures(self) -> bool:
+        if self._chk_export_textures is not None:
+            return bool(self.mqt.IsWidgetChecked(self._chk_export_textures))
+        return self._cached_bool("export_textures", self.default_export_textures)
 
     def init_ui(self):
         self.widget = self.mqt.CreateToplevelWidget("模型导出配置", None)
@@ -470,6 +482,14 @@ class ModelExportDialog:
         self._chk_flip_u = chk_flip_u
         self.mqt.AddWidget(export_flags,chk_flip_u)
 
+        chk_tex = self.mqt.CreateCheckbox(None)
+        self.mqt.SetWidgetText(chk_tex, "导出着色器输入贴图（PNG）")
+        self.mqt.SetWidgetChecked(
+            chk_tex,
+            self._cached_bool("export_textures", self.default_export_textures),
+        )
+        self._chk_export_textures = chk_tex
+        self.mqt.AddWidget(export_flags, chk_tex)
 
         self.mqt.AddWidget(self.widget, export_flags)
 

@@ -63,6 +63,7 @@ def ExportFbx(pyrenderdoc_, data_):
     data_map = dialog.get_data_map(size_map)
     decode_mode_map = dialog.get_decode_mode_map(size_map)
     export_cfg = dialog.get_export_config()
+    do_export_textures = dialog.should_export_textures()
 
     save_path = emgr.SaveFileName(
         "选择模型导出的位置", "", "FBX (*.fbx);;OBJ (*.obj)"
@@ -131,24 +132,26 @@ def ExportFbx(pyrenderdoc_, data_):
         emgr.MessageDialog("已取消导出", "Info")
         return
 
-    progress.setLabelText("正在导出着色器输入贴图…")
-    progress.setValue(92)
-    _process_ui_events()
-
-    from .csv_to_model.texture_exporter import export_textures_for_eid, texture_output_dir_for_model
-
     tex_files = []
     tex_errors = []
     tex_dir = ""
-    try:
-        tex_dir = texture_output_dir_for_model(save_path)
-        tex_files, tex_errors = export_textures_for_eid(
-            pyrenderdoc_, tex_dir, eid=eid
-        )
-    except Exception as exc:
-        import traceback
 
-        tex_errors = ["贴图导出失败: %s" % exc, traceback.format_exc()]
+    if do_export_textures:
+        progress.setLabelText("正在导出着色器输入贴图…")
+        progress.setValue(92)
+        _process_ui_events()
+
+        from .csv_to_model.texture_exporter import export_textures_for_eid, texture_output_dir_for_model
+
+        try:
+            tex_dir = texture_output_dir_for_model(save_path)
+            tex_files, tex_errors = export_textures_for_eid(
+                pyrenderdoc_, tex_dir, eid=eid
+            )
+        except Exception as exc:
+            import traceback
+
+            tex_errors = ["贴图导出失败: %s" % exc, traceback.format_exc()]
 
     progress.setValue(100)
     progress.setLabelText("完成")
